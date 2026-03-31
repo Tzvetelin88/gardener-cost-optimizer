@@ -1,0 +1,26 @@
+backend:
+  replicaCount: 1
+  image:
+    repository: smart-cost-optimizer-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  env:
+    API_ADDR: :8080
+    DATA_SOURCE: "real"
+    ENABLE_FALLBACK_DATA: "false"
+    FRONTEND_ORIGIN: "*"
+    GARDENER_KUBECONFIG: ""
+    GARDENER_CONTEXT: ""
+    PROMETHEUS_URL: ""
+    SHOOT_KUBECONFIG_MAP: ""
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: smart-cost-optimizer-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 80

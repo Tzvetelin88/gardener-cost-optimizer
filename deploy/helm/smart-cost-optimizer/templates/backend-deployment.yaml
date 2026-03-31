@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smart-cost-optimizer-api
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      app: smart-cost-optimizer-api
+  template:
+    metadata:
+      labels:
+        app: smart-cost-optimizer-api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.backend.service.port }}
+          env:
+            - name: API_ADDR
+              value: {{ .Values.backend.env.API_ADDR | quote }}
+            - name: DATA_SOURCE
+              value: {{ .Values.backend.env.DATA_SOURCE | quote }}
+            - name: ENABLE_FALLBACK_DATA
+              value: {{ .Values.backend.env.ENABLE_FALLBACK_DATA | quote }}
+            - name: FRONTEND_ORIGIN
+              value: {{ .Values.backend.env.FRONTEND_ORIGIN | quote }}
+            - name: GARDENER_KUBECONFIG
+              value: {{ .Values.backend.env.GARDENER_KUBECONFIG | quote }}
+            - name: GARDENER_CONTEXT
+              value: {{ .Values.backend.env.GARDENER_CONTEXT | quote }}
+            - name: PROMETHEUS_URL
+              value: {{ .Values.backend.env.PROMETHEUS_URL | quote }}
+            - name: SHOOT_KUBECONFIG_MAP
+              value: {{ .Values.backend.env.SHOOT_KUBECONFIG_MAP | quote }}

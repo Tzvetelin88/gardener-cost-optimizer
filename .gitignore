@@ -1,0 +1,10 @@
+frontend/node_modules/
+frontend/dist/
+backend/bin/
+*.exe
+*.log
+.DS_Store
+.idea/
+.vscode/
+DIFF.md
+REAL.md

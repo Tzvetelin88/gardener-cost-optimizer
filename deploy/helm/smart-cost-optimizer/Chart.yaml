@@ -1,0 +1,6 @@
+apiVersion: v2
+name: smart-cost-optimizer
+description: Gardener-aware Smart Cost Optimizer API and dashboard
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

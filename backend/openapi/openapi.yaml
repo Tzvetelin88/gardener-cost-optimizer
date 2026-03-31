@@ -1,0 +1,102 @@
+openapi: 3.0.3
+info:
+  title: Smart Cost Optimizer API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/clusters:
+    get:
+      summary: List Gardener shoot clusters
+      responses:
+        "200":
+          description: Cluster summaries
+  /api/v1/recommendations:
+    get:
+      summary: List cost optimization recommendations
+      responses:
+        "200":
+          description: Recommendation list
+  /api/v1/recommendations/{id}:
+    get:
+      summary: Get one recommendation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Recommendation details
+        "404":
+          description: Recommendation not found
+  /api/v1/actions:
+    get:
+      summary: List executed actions
+      responses:
+        "200":
+          description: Action history
+  /api/v1/actions/hibernate-cluster:
+    post:
+      summary: Hibernate a Gardener shoot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clusterName:
+                  type: string
+      responses:
+        "202":
+          description: Action accepted
+  /api/v1/actions/scale-nodepool:
+    post:
+      summary: Resize a worker pool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clusterName:
+                  type: string
+                workerPool:
+                  type: string
+                minimum:
+                  type: integer
+                maximum:
+                  type: integer
+      responses:
+        "202":
+          description: Action accepted
+  /api/v1/actions/move-workload:
+    post:
+      summary: Move a stateless workload between shoot clusters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sourceCluster:
+                  type: string
+                targetCluster:
+                  type: string
+                namespace:
+                  type: string
+                workloadName:
+                  type: string
+      responses:
+        "202":
+          description: Action accepted
+  /api/v1/savings/summary:
+    get:
+      summary: Aggregate savings summary
+      responses:
+        "200":
+          description: Savings summary
