@@ -42,3 +42,26 @@ export interface ActionRecord {
   createdAt: string;
   message: string;
 }
+
+export interface WorkloadSummary {
+  cluster: string;
+  namespace: string;
+  name: string;
+  kind: string;
+  replicas: number;
+  cpuRequest: number;
+  memoryGiB: number;
+  stateful: boolean;
+  monthlyCost: number;
+}
+
+export interface ClusterDetail {
+  clusterName: string;
+  workloads: WorkloadSummary[];
+  metrics: {
+    cpuUtilizationPercent: number;
+    memoryUtilizationPercent: number;
+    nodeCount: number;
+    idleScore: number;
+  };
+}

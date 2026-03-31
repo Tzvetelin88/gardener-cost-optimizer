@@ -60,12 +60,16 @@ func main() {
 		log.Fatalf("unable to initialize metrics provider: %v", err)
 	}
 
-	actionService, err := actions.NewService(gardenerClient, cfg.ShootKubeconfigMap, mockLandscape)
+	actionService, err := actions.NewServiceWithLogPath(gardenerClient, cfg.ShootKubeconfigMap, mockLandscape, cfg.ActionLogPath)
 	if err != nil {
 		log.Fatalf("unable to initialize action service: %v", err)
 	}
 
-	server := httpapi.NewServer(reader, recommender.NewEngine(metricsProvider), actionService, cfg.RefreshInterval, cfg.FrontendOrigin)
+	engineCfg := recommender.EngineConfig{
+		IdleThresholdPercent:     cfg.IdleThresholdPercent,
+		TargetUtilizationPercent: cfg.TargetUtilizationPercent,
+	}
+	server := httpapi.NewServer(reader, recommender.NewEngineWithConfig(metricsProvider, engineCfg), actionService, cfg.RefreshInterval, cfg.FrontendOrigin)
 	server.Start(ctx)
 
 	httpServer := &http.Server{

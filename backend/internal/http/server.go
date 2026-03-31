@@ -21,6 +21,7 @@ type ClusterReader interface {
 type ActionService interface {
 	List() []models.ActionRecord
 	HibernateCluster(context.Context, string) (models.ActionRecord, error)
+	WakeCluster(context.Context, string) (models.ActionRecord, error)
 	ScaleNodePool(context.Context, string, string, int64, int64) (models.ActionRecord, error)
 	MoveWorkload(context.Context, string, string, string, string) (models.ActionRecord, error)
 }
@@ -32,8 +33,9 @@ type Server struct {
 	refresh        time.Duration
 	frontendOrigin string
 
-	mu       sync.RWMutex
-	snapshot models.InventorySnapshot
+	mu          sync.RWMutex
+	snapshot    models.InventorySnapshot
+	metricsMap  map[string]models.ClusterMetrics
 }
 
 func NewServer(reader ClusterReader, engine *recommender.Engine, actionsService ActionService, refresh time.Duration, frontendOrigin string) *Server {
@@ -70,10 +72,12 @@ func (s *Server) Handler() http.Handler {
 		_, _ = writer.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/api/v1/clusters", s.handleClusters)
+	mux.HandleFunc("/api/v1/clusters/", s.handleClusterByID)
 	mux.HandleFunc("/api/v1/recommendations", s.handleRecommendations)
 	mux.HandleFunc("/api/v1/recommendations/", s.handleRecommendationByID)
 	mux.HandleFunc("/api/v1/actions", s.handleActions)
 	mux.HandleFunc("/api/v1/actions/hibernate-cluster", s.handleHibernate)
+	mux.HandleFunc("/api/v1/actions/wake-cluster", s.handleWakeCluster)
 	mux.HandleFunc("/api/v1/actions/scale-nodepool", s.handleScaleNodePool)
 	mux.HandleFunc("/api/v1/actions/move-workload", s.handleMoveWorkload)
 	mux.HandleFunc("/api/v1/savings/summary", s.handleSavingsSummary)
@@ -88,7 +92,7 @@ func (s *Server) refreshSnapshot(ctx context.Context) {
 		return
 	}
 
-	snapshot, _, err := s.engine.BuildSnapshot(ctx, clusters)
+	snapshot, metricsMap, err := s.engine.BuildSnapshot(ctx, clusters)
 	if err != nil {
 		log.Printf("build snapshot: %v", err)
 		return
@@ -96,6 +100,7 @@ func (s *Server) refreshSnapshot(ctx context.Context) {
 
 	s.mu.Lock()
 	s.snapshot = snapshot
+	s.metricsMap = metricsMap
 	s.mu.Unlock()
 }
 
@@ -106,9 +111,47 @@ func (s *Server) handleClusters(writer http.ResponseWriter, request *http.Reques
 	}
 
 	s.mu.RLock()
-	clusters := append([]models.ClusterSummary(nil), s.snapshot.Clusters...)
+	clusters := cloneSlice(s.snapshot.Clusters)
 	s.mu.RUnlock()
 	writeJSON(writer, http.StatusOK, clusters)
+}
+
+func (s *Server) handleClusterByID(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(request.URL.Path, "/api/v1/clusters/")
+	if id == "" {
+		s.handleClusters(writer, request)
+		return
+	}
+
+	s.mu.RLock()
+	clusterMetrics, ok := s.metricsMap[id]
+	s.mu.RUnlock()
+
+	if !ok {
+		http.Error(writer, "cluster not found", http.StatusNotFound)
+		return
+	}
+
+	workloads := clusterMetrics.Workloads
+	if workloads == nil {
+		workloads = []models.WorkloadSummary{}
+	}
+
+	writeJSON(writer, http.StatusOK, map[string]interface{}{
+		"clusterName": id,
+		"workloads":   workloads,
+		"metrics": map[string]interface{}{
+			"cpuUtilizationPercent":    clusterMetrics.CPUUtilizationPercent,
+			"memoryUtilizationPercent": clusterMetrics.MemoryUtilizationPercent,
+			"nodeCount":                clusterMetrics.NodeCount,
+			"idleScore":                clusterMetrics.IdleScore,
+		},
+	})
 }
 
 func (s *Server) handleRecommendations(writer http.ResponseWriter, request *http.Request) {
@@ -118,7 +161,7 @@ func (s *Server) handleRecommendations(writer http.ResponseWriter, request *http
 	}
 
 	s.mu.RLock()
-	recommendations := append([]models.Recommendation(nil), s.snapshot.Recommendations...)
+	recommendations := cloneSlice(s.snapshot.Recommendations)
 	s.mu.RUnlock()
 	writeJSON(writer, http.StatusOK, recommendations)
 }
@@ -165,6 +208,28 @@ func (s *Server) handleHibernate(writer http.ResponseWriter, request *http.Reque
 	}
 
 	record, err := s.actions.HibernateCluster(request.Context(), payload.ClusterName)
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, record)
+		return
+	}
+
+	s.refreshSnapshot(request.Context())
+	writeJSON(writer, http.StatusAccepted, record)
+}
+
+func (s *Server) handleWakeCluster(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload apiv1alpha1.HibernateClusterRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	record, err := s.actions.WakeCluster(request.Context(), payload.ClusterName)
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, record)
 		return
@@ -248,4 +313,14 @@ func writeJSON(writer http.ResponseWriter, status int, payload interface{}) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+func cloneSlice[T any](items []T) []T {
+	if len(items) == 0 {
+		return []T{}
+	}
+
+	cloned := make([]T, len(items))
+	copy(cloned, items)
+	return cloned
 }

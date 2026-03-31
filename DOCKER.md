@@ -1,83 +1,65 @@
-# Docker Usage
+# Docker Setup
 
-This project includes a containerized setup so it can run consistently on Windows, Linux, and macOS without relying on local Go or Node installations.
+Docker Compose is the easiest way to run the full stack locally. It requires no local Go or Node installation and works consistently on Windows, Linux, and macOS.
 
-## Files
+## Container Files
 
-Container-related files in the repository root:
+```
+docker-compose.yml
+backend/Dockerfile
+backend/.dockerignore
+frontend/Dockerfile
+frontend/.dockerignore
+frontend/nginx.conf
+```
 
-- `docker-compose.yml`
-- `backend/Dockerfile`
-- `backend/.dockerignore`
-- `frontend/Dockerfile`
-- `frontend/.dockerignore`
-- `frontend/nginx.conf`
+## What Runs
 
-## What Docker Runs
+Two containers start:
 
-The compose stack starts two containers:
+| Container | Description | Port |
+|---|---|---|
+| `gardener-cost-optimizer-api` | Go backend in `mock` mode | `8080` |
+| `gardener-cost-optimizer-frontend` | Built React app served by Nginx | `5173` |
 
-- `gardener-cost-optimizer-api`
-  - Go backend
-  - listens on port `8080`
-  - defaults to `mock` mode in Docker
-- `gardener-cost-optimizer-frontend`
-  - built React app served by Nginx
-  - listens on port `5173` on the host
-  - proxies `/api` to the backend container
+The frontend Nginx config proxies all `/api` requests to the backend container, so the browser only needs to reach `localhost:5173`.
 
-## Run With Docker Compose
+## Commands
 
-From the repository root:
+Build and start:
 
 ```bash
 docker compose up --build
 ```
 
-Run in background:
+Start in background:
 
 ```bash
 docker compose up --build -d
 ```
 
-Stop the stack:
+Stop:
 
 ```bash
 docker compose down
 ```
 
-## Default Docker Endpoints
+## Endpoints After Startup
 
-After startup:
-
-- frontend: `http://localhost:5173`
-- backend health: `http://localhost:8080/healthz`
-- backend API: `http://localhost:8080/api/v1/recommendations`
+```
+http://localhost:5173                             frontend dashboard
+http://localhost:8080/healthz                     backend health → "ok"
+http://localhost:8080/api/v1/recommendations      recommendations
+http://localhost:8080/api/v1/savings/summary      savings summary
+```
 
 ## Default Mode
 
-The Docker setup uses:
+The Docker setup defaults to `DATA_SOURCE=mock`. The full dashboard, API, and action flow work without any Gardener environment.
 
-- `DATA_SOURCE=mock`
+## Running Against Real Gardener
 
-This makes the container stack work without a real Gardener landscape.
-
-## Run Docker In Mock Mode
-
-The default compose file already uses mock mode:
-
-```yaml
-environment:
-  DATA_SOURCE: mock
-```
-
-This is the easiest way to demo the project.
-
-## Run Docker In Real Mode
-
-If you want to connect to a real Gardener environment, override the backend environment values.
-
-Example:
+Override the backend environment to connect to a real Gardener landscape:
 
 ```bash
 docker compose run --rm \
@@ -87,38 +69,19 @@ docker compose run --rm \
   smart-cost-optimizer-api
 ```
 
-For a real deployment, it is usually better to use the Helm chart instead of local Docker Compose.
+For a production deployment, use the Helm chart instead of Docker Compose. See `deploy/helm/smart-cost-optimizer`.
 
-## Health Check
+## Quick Verification
 
-The backend container exposes:
-
-```text
-http://localhost:8080/healthz
-```
-
-Expected result:
-
-```text
-ok
-```
-
-## Example Verification
-
-Check recommendations:
+After `docker compose up --build`, run these to confirm the stack is working:
 
 ```bash
+curl http://localhost:8080/healthz
+# → ok
+
 curl http://localhost:8080/api/v1/recommendations
-```
+# → JSON array of recommendations
 
-Check summary:
-
-```bash
 curl http://localhost:8080/api/v1/savings/summary
+# → { "totalMonthlySpend": ..., "totalMonthlySavings": ..., ... }
 ```
-
-## Notes
-
-- Docker Compose is the most consistent cross-platform way to run this project locally.
-- The shell and PowerShell scripts are still useful, but Docker avoids local runtime differences.
-- The Docker setup is best for `mock` mode demos and quick validation.

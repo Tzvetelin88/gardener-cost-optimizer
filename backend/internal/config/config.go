@@ -8,15 +8,18 @@ import (
 )
 
 type Config struct {
-	APIAddress          string
-	DataSourceMode      string
-	GardenerKubeconfig  string
-	GardenerContext     string
-	PrometheusURL       string
-	ShootKubeconfigMap  map[string]string
-	RefreshInterval     time.Duration
-	EnableFallbackData  bool
-	FrontendOrigin      string
+	APIAddress               string
+	DataSourceMode           string
+	GardenerKubeconfig       string
+	GardenerContext          string
+	PrometheusURL            string
+	ShootKubeconfigMap       map[string]string
+	RefreshInterval          time.Duration
+	EnableFallbackData       bool
+	FrontendOrigin           string
+	IdleThresholdPercent     float64
+	TargetUtilizationPercent float64
+	ActionLogPath            string
 }
 
 func Load() Config {
@@ -28,15 +31,18 @@ func Load() Config {
 	}
 
 	return Config{
-		APIAddress:         env("API_ADDR", ":8080"),
-		DataSourceMode:     dataSourceMode(),
-		GardenerKubeconfig: os.Getenv("GARDENER_KUBECONFIG"),
-		GardenerContext:    os.Getenv("GARDENER_CONTEXT"),
-		PrometheusURL:      os.Getenv("PROMETHEUS_URL"),
-		ShootKubeconfigMap: parseMap(os.Getenv("SHOOT_KUBECONFIG_MAP")),
-		RefreshInterval:    refresh,
-		EnableFallbackData: env("ENABLE_FALLBACK_DATA", "true") == "true",
-		FrontendOrigin:     env("FRONTEND_ORIGIN", "*"),
+		APIAddress:               env("API_ADDR", ":8080"),
+		DataSourceMode:           dataSourceMode(),
+		GardenerKubeconfig:       os.Getenv("GARDENER_KUBECONFIG"),
+		GardenerContext:          os.Getenv("GARDENER_CONTEXT"),
+		PrometheusURL:            os.Getenv("PROMETHEUS_URL"),
+		ShootKubeconfigMap:       parseMap(os.Getenv("SHOOT_KUBECONFIG_MAP")),
+		RefreshInterval:          refresh,
+		EnableFallbackData:       env("ENABLE_FALLBACK_DATA", "true") == "true",
+		FrontendOrigin:           env("FRONTEND_ORIGIN", "*"),
+		IdleThresholdPercent:     parseFloat(os.Getenv("IDLE_THRESHOLD"), 75),
+		TargetUtilizationPercent: parseFloat(os.Getenv("TARGET_UTILIZATION"), 70),
+		ActionLogPath:            env("ACTION_LOG_PATH", "./data/actions.jsonl"),
 	}
 }
 
@@ -64,6 +70,16 @@ func parseMap(raw string) map[string]string {
 	}
 
 	return values
+}
+
+func parseFloat(raw string, fallback float64) float64 {
+	if raw != "" {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && v > 0 {
+			return v
+		}
+	}
+
+	return fallback
 }
 
 func dataSourceMode() string {

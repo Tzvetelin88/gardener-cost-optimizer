@@ -1,5 +1,6 @@
 import type {
   ActionRecord,
+  ClusterDetail,
   ClusterSummary,
   Recommendation,
   SavingsSummary,
@@ -43,4 +44,15 @@ export function executeAction(type: string, payload: Record<string, unknown>) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function wakeCluster(clusterName: string) {
+  return readJson<ActionRecord>("/actions/wake-cluster", {
+    method: "POST",
+    body: JSON.stringify({ clusterName }),
+  });
+}
+
+export function getClusterDetail(clusterName: string) {
+  return readJson<ClusterDetail>(`/clusters/${encodeURIComponent(clusterName)}`);
 }

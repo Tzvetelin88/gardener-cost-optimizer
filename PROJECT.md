@@ -1,335 +1,131 @@
-Gardener already gives you the hard part: a Kubernetes-native control plane for managing clusters via CRDs/controllers, with hosted control planes running in seed clusters, plus an extension model for provider-specific logic. It is explicitly built around out-of-tree extensions, where controllers reconcile extensions.gardener.cloud resources, and extensions can add provider support or extra capabilities. A standard Gardener installation depends on extensions for infrastructure providers, operating systems, CNI, and optional services like DNS, certificates, and OIDC.
+# Project Architecture
 
-A few important things Gardener already has today:
+## Context
 
-hosted control planes (“kubeception”) instead of dedicated master VMs, which lowers cost and simplifies day-2 operations;
-multi-cloud support for infrastructures such as AWS, Azure, GCP, OpenStack, vSphere, Alicloud and others via provider extensions;
-extension categories for infrastructure, OS, networking/CNI, DNS, certificates, OIDC, plus logging/monitoring integration;
-workload identity federation for cloud APIs, so components can authenticate to AWS/Azure/GCP without static long-lived credentials;
-hibernation, upgrades, workerless shoots, backup/restore and etcd lifecycle handled by Gardener components such as etcd-druid;
+Gardener is a Kubernetes cluster lifecycle manager. It creates and manages shoot clusters across cloud providers, handles upgrades, hibernation, and worker pool scaling. What Gardener explicitly does not include is a cost intelligence layer: there is no cross-cluster utilization analysis, no savings estimation, and no optimization recommendations.
 
-So for your SAP demo, the strongest story is:
+This project fills that gap by building an intelligence and action layer on top of Gardener.
 
-“We use Gardener as the cluster lifecycle engine, and we build a new operator-driven platform API above it.”
+The mental model is:
 
-What to build on top
+```
+Gardener          →  cluster lifecycle + execution platform
+Smart Cost Optimizer  →  intelligence + recommendations + operator actions
+```
 
-You mentioned:
+## What the Product Does
 
-create VMs in AWS/Azure
-add network
-add volumes
-support deployments, statefulsets, daemonsets
+The optimizer does four things:
 
-That splits naturally into two layers:
+1. Reads cluster inventory from Gardener (or from a built-in mock landscape).
+2. Evaluates cluster utilization, workload placement, and estimated cost.
+3. Produces recommendations with evidence and monthly savings estimates.
+4. Lets operators execute safe cost-saving actions through a REST API and React dashboard.
 
-Layer 1: Infrastructure / cluster lifecycle
+Recommendation kinds:
 
-This is where Gardener is strongest.
-You should model high-level APIs like:
+- `idle-cluster` — cluster has no significant workloads and is a candidate for hibernation
+- `cheaper-placement` — a stateless workload is running on a more expensive cluster than necessary
+- `cluster-consolidation` — two clusters with similar purpose and low utilization can be merged
+- `scale-nodepool` — a worker pool is oversized relative to current demand
 
-Environment
-Cluster
-NodePool
-NetworkAttachment
-VolumeClass
-WorkloadIdentityBinding
+Executable actions (in both mock and real mode):
 
-Your controller translates these into Gardener Shoot specs, cloud/provider config, and optional extension resources.
+- hibernate a cluster
+- wake a hibernated cluster
+- move a stateless workload to a cheaper cluster
+- scale a worker pool min/max
 
-Layer 2: Application / workload platform
+## Architecture
 
-This is your differentiator.
-Build higher-level CRDs like:
+The backend is a single Go service with clear internal boundaries:
 
-AppDeployment
-DataService
-BatchWorkload
-PlatformNetworkPolicy
-TenantProject
+```
+cmd/api          → HTTP server entrypoint
+internal/config  → environment-based configuration
+internal/gardener → data source: real Gardener client and mock fallback
+internal/metrics  → workload and utilization signals per cluster
+internal/pricing  → heuristic cost catalog per cloud/region/machine type
+internal/recommender → recommendation engine: scoring, evidence, savings
+internal/actions  → action service: execute and persist operator decisions
+internal/http    → REST API handlers and middleware
+internal/models  → shared domain types
+api/v1alpha1     → CRD-style type definitions (Recommendation, Action, OptimizationPolicy)
+```
 
-These can render to:
+The frontend is a React single-page application served by Nginx in the Docker setup, or by Vite in development mode. It calls the backend REST API and renders four main areas: cluster inventory, recommendations, action history, and savings summary.
 
-Deployment
-StatefulSet
-DaemonSet
-Service
-Ingress
-PVCs / storage classes
-policy objects
+## Data Source Layer
 
-That is much more demo-friendly than “yet another cluster provisioner”.
+One of the key design decisions is that the backend does not require Gardener to be running. The `DATA_SOURCE` variable selects how cluster and workload data is loaded:
 
-Best feature ideas to add on top of Gardener
+- `mock` — a built-in landscape with sample clusters and workloads, all mutations in-memory
+- `real` — connects to a real Garden cluster using a kubeconfig; reads live `Shoot` objects
+- `auto` — tries real first, silently falls back to mock
 
-These are the most realistic and valuable additions.
+This makes the product runnable on any laptop without any external dependencies, and it gives a clean upgrade path to a real Gardener environment without changing the product architecture.
 
-1. A single cross-cloud “Environment” API
+## Action Persistence
 
-Example:
+Completed actions are written to a JSONL file (`data/actions.jsonl` by default). On restart, the service reloads this history. This means the action log survives container restarts without needing a database.
 
-apiVersion: platform.sap.demo/v1alpha1
-kind: Environment
-spec:
-  cloud: aws
-  region: eu-central-1
-  kubernetes:
-    version: "1.31"
-  nodePools:
-    - name: system
-      min: 3
-      max: 10
-      machineType: m6i.large
-  networking:
-    exposure: private
-  workloads:
-    profiles:
-      - web
-      - stateful
+## Tech Stack
 
-Your controller turns this into the right Gardener Shoot and provider config.
+**Backend:**
 
-Why it is good: Gardener already harmonizes clusters across infrastructures; your API can harmonize the tenant experience.
+- Go with a Kubernetes-style project layout
+- `internal/` for all business logic (not exposed as a library)
+- `api/v1alpha1/` for typed domain objects following Kubernetes CRD conventions
+- Gin for HTTP routing
+- Standard Kubernetes client-go libraries for Gardener integration
 
-2. Day-2 policy packs
+**Frontend:**
 
-A CRD like ClusterProfile or PlatformBaseline that automatically applies:
+- React + TypeScript
+- Vite for development and build
+- Nginx for serving the built app in Docker
+- Flat feature-folder layout: `features/clusters`, `features/recommendations`, `features/actions`, `features/summary`
 
-logging
-monitoring
-OpenTelemetry
-ingress defaults
-Pod Security defaults
-network policies
-backup policy
-cost-saving schedule
+**Delivery:**
 
-Gardener already supports extension integration with monitoring/logging and has hibernation and workload identity features, so this becomes a natural “platform opinion” layer.
+- Docker Compose for local cross-platform demo (no local Go or Node required)
+- Shell script (`scripts/dev.sh`) and PowerShell script (`scripts/dev.ps1`) for local development
+- Makefile for common commands
+- Helm chart under `deploy/helm/smart-cost-optimizer` for Kubernetes deployment
 
-3. Cloud-agnostic workload identity broker
+## Design Decisions
 
-This is a very good SAP-style feature.
-Expose one CRD such as:
+**No database required.** Cluster state in mock mode is held in memory. Action history is a flat JSONL file. This keeps local setup to a single `docker compose up`.
 
-kind: ExternalAccessPolicy
-spec:
-  serviceAccountRef: payments-api
-  access:
-    - type: s3
-      bucket: invoices
-    - type: keyvault
-      name: payments-secrets
+**Recommendations are always re-computed.** The recommendation engine reruns on a configurable interval. There is no persistent recommendation store; the engine is the source of truth.
 
-Then translate it to the right cloud identity setup using Gardener workload identity capabilities for AWS/Azure/GCP.
+**Consolidation is advisory, not executable.** Merging two clusters involves team, data, and dependency decisions that cannot be automated safely. The product surfaces the opportunity and estimated savings, but leaves the decision to the operator.
 
-4. Cost optimization operator
+**Heuristic pricing.** Cluster costs are estimated from a pricing catalog based on machine type, cloud, and region. This is intentionally approximate. The value is in relative comparisons (cluster A is cheaper than B), not absolute billing numbers.
 
-A very strong demo feature:
+**Thresholds are configurable.** `IDLE_THRESHOLD` and `TARGET_UTILIZATION` can be tuned via environment variables, so the recommendation sensitivity can be adjusted without changing code.
 
-automatic hibernation schedules
-right-sizing recommendations
-TTL environments
-“preview cluster” expiration
-idle-cluster detection
-non-prod autosleep
-
-Gardener already has cluster hibernation and hosted control planes optimized for lower TCO, so this feature fits well.
-
-5. Self-service application landing zones
-
-Give tenants one CRD that creates:
-
-namespace layout
-quotas
-RBAC
-network policy
-secrets integration
-ingress / DNS
-certs
-
-Gardener already has DNS and certificate extension concepts plus managed resources for applying resources into shoots.
-
-6. Disaster recovery / migration workflow
-
-Interesting advanced feature:
-
-backup policy CRD
-restore to new region
-failover drill
-seed migration orchestration
-
-Gardener has backup/restore and proposals/docs around shoot control plane migration, so you could package this as an operator workflow.
-
-What I would not build first
-
-I would not start by writing:
-
-your own full cloud provider controllers for raw VM/network creation
-your own cluster API from scratch
-your own etcd/control-plane lifecycle
-a giant “framework-heavy” Java-style architecture in Go
-
-That duplicates what Gardener already solves.
-
-Recommended minimum viable project
-
-For a serious but lean first version, build this:
-
-MVP scope
-Environment CRD
-Creates one Gardener Shoot.
-WorkloadBundle CRD
-Deploys one of:
-Deployment
-StatefulSet
-DaemonSet
-PlatformProfile CRD
-Applies defaults for:
-ingress
-storage class
-network policy
-autoscaling
-observability
-Optional ExternalAccessPolicy CRD
-Maps workloads to AWS/Azure identity access.
-
-That is enough to demo:
-
-cluster creation
-multi-cloud abstraction
-workload deployment
-opinionated platform controls
-extensibility
-Go project structure
-
-For Go, I would use idiomatic Go + Kubernetes operator conventions, not a Java-style layered framework.
-
-Best fit:
+## Scope and Limits
 
-kubebuilder + controller-runtime
-possibly operator-sdk only if you want its packaging/scaffolding, but under the hood the important part is still controller-runtime
-
-A clean layout:
-
-cmd/
-  manager/
-    main.go
+Current scope:
 
-api/
-  v1alpha1/
-    environment_types.go
-    workloadbundle_types.go
-    platformprofile_types.go
-    zz_generated.deepcopy.go
+- cluster inventory from Gardener or mock
+- recommendation engine for four decision types
+- executable actions for hibernation, wake, move, and scale
+- persistent action history
+- React dashboard
+- REST API with full OpenAPI spec
 
-internal/
-  controller/
-    environment_controller.go
-    workloadbundle_controller.go
-    platformprofile_controller.go
-  service/
-    gardener/
-      shoot_builder.go
-      shoot_reconciler.go
-    workloads/
-      deployment_renderer.go
-      statefulset_renderer.go
-      daemonset_renderer.go
-    cloud/
-      identity_mapper.go
-  webhooks/
-  metrics/
-  testutil/
+Known limits:
 
-pkg/
-  predicates/
-  labels/
-  conditions/
-  resource/
-  errors/
+- pricing is heuristic, not backed by cloud billing APIs
+- metrics are derived from Kubernetes resource requests, not actual Prometheus usage
+- consolidation is recommendation-only
+- stateful workload migration is not supported
+- `OptimizationPolicy` CRD type is defined but no controller processes it yet
 
-config/
-  crd/
-  rbac/
-  manager/
-  samples/
+## Positioning
 
-charts/
-docs/
-hack/
-Design rules
-Keep reconciliation logic in controllers.
-Put spec-to-resource translation in small “builder/renderer” packages.
-Keep cloud-specific code behind interfaces.
-Prefer composition over inheritance-style patterns.
-Make every CRD status-rich: ObservedGeneration, Conditions, Phase, LastError.
-Use finalizers everywhere external resources exist.
-Make idempotency a hard requirement.
-My recommendation on “framework vs pattern”
+This project is not a Gardener fork. It does not modify Gardener internals. It sits above Gardener and calls the same APIs that operators already use.
 
-In Go, do not look for a Spring-like framework architecture.
-
-Use:
-
-controller-runtime as the platform runtime
-CRD-driven APIs
-reconcilers
-small services/builders
-clear interfaces for provider adapters
-
-So:
-
-yes to patterns
-no to heavy framework abstraction
-
-Good Go operator code usually looks boring and explicit. That is a strength.
-
-Best starting technical strategy
-Option A — safest
-
-Build a standalone operator that consumes your CRDs and creates:
-
-Gardener Shoot
-standard Kubernetes workload resources
-
-This is the best first step.
-
-Option B — deeper integration
-
-Build a Gardener extension
-if your feature truly belongs inside Gardener’s extension contracts, for example provider-specific infra behavior or control-plane integration. Gardener’s extension model is designed for exactly that.
-
-For your case, I would start with Option A first, then move selected parts into a Gardener extension only if needed.
-
-Concrete feature shortlist for SAP demo
-
-My top 5 would be:
-
-Environment CRD → creates homogeneous clusters on AWS/Azure via Gardener
-WorkloadBundle CRD → one API for Deployment/StatefulSet/DaemonSet
-Policy/Profile CRD → observability, security, autoscaling, ingress defaults
-Identity integration → cloud access without static credentials
-Cost controls → hibernation, TTL, non-prod auto-sleep
-
-That tells a very clean story:
-“Gardener gives multi-cloud Kubernetes lifecycle; our operator adds enterprise platform workflows.”
-
-Bottom line
-
-Gardener already has the foundation:
-
-cluster lifecycle
-hosted control planes
-extensibility
-provider integrations
-identity, backup, upgrades, hibernation, monitoring hooks
-
-So your project should focus on:
-
-higher-level APIs
-tenant experience
-policy automation
-cross-cloud abstraction
-day-2 operations
-
-That is where new value exists.
+The long-term direction is to make cluster costs visible, recommend the cheapest relevant placement for stateless workloads, and gradually extend action coverage as confidence in the recommendation engine grows.
