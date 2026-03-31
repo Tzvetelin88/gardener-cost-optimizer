@@ -1,317 +1,177 @@
-# Gardener Go Structure Review
-
-This file explains the Go structure used by Gardener, whether it follows good practice, and how a new SAP-side extension or operator should be structured to fit naturally with the Gardener ecosystem.
-
-## Scope
-
-The local workspace does not contain a cloned Gardener source tree, only `PROJECT.md`. This review is based on the upstream Gardener repository and official documentation:
-
-- `https://github.com/gardener/gardener`
-- `https://raw.githubusercontent.com/gardener/gardener/master/README.md`
-- `https://gardener.cloud/docs/gardener/concepts/architecture/`
-- `https://gardener.cloud/docs/gardener/concepts/gardenlet/`
-- `https://gardener.cloud/docs/gardener/concepts/scheduler/`
-- `https://gardener.cloud/docs/gardener/extensions/`
-
-## Overall Assessment
-
-Gardener follows a good Go structure for a large Kubernetes control-plane product.
-
-It is not a tiny "clean architecture" Go service, and it should not be judged like one. It is a large control-plane monorepo with multiple binaries, controllers, APIs, schedulers, operators, webhooks, charts, examples, and extension contracts.
-
-For this type of project, the structure is good and aligned with Kubernetes-style engineering.
-
-## High-Level Repository Shape
-
-Upstream Gardener is organized roughly like this:
-
-- `cmd/`: entrypoints for the different binaries
-- `pkg/`: most reusable and internal core packages
-- `charts/`: Helm charts
-- `docs/`: project documentation
-- `example/`: example manifests and configs
-- `extensions/`: extension-related materials
-- `test/`: tests
-- `hack/`: scripts, generators, and developer tooling
-- `plugin/`, `imagevector/`, `third_party/`: supporting packages and assets
-
-This is normal for a large Kubernetes platform repository.
-
-## Why The Structure Makes Sense
-
-### `cmd/`
-
-Gardener has multiple main binaries because it is not one controller only. It has different operational responsibilities, for example:
-
-- API server
-- controller manager
-- scheduler
-- gardenlet
-- operator
-- admission-related components
-
-This is a strong design choice because:
-
-- each binary has a clear runtime responsibility
-- components can evolve independently
-- operational blast radius is lower than one giant binary
-- the architecture mirrors Kubernetes itself
-
-### `pkg/`
-
-Gardener keeps most of its code under `pkg/`, which is common in older and larger Go/Kubernetes repositories. In small modern Go services, people often prefer `internal/` for most code, but in projects of this scale, `pkg/` is still a practical choice.
-
-What matters is not the folder name by itself, but whether the code is separated clearly enough by concern.
-
-Gardener's package layout appears aligned with its architecture, for example:
-
-- API-related packages
-- controller logic
-- scheduler logic
-- gardenlet logic
-- extension support
-- operator support
-- utility and component packages
-
-## Best-Practice Alignment
-
-Gardener follows important Kubernetes/operator best practices well:
-
-- declarative APIs and controller reconciliation
-- clear split between API, controller, scheduler, and agent responsibilities
-- extension points for provider-specific logic
-- admission and mutation model where needed
-- example manifests and operational configuration kept in-repo
-
-It also follows the Kubernetes mindset well:
-
-- controllers are first-class
-- reconciliation is the core behavior model
-- large features are split into dedicated components instead of hidden service layers
-- platform behavior is expressed through CRDs and control loops
-
-## Structural Strengths
-
-The strongest structural qualities are:
-
-1. Kubernetes-native decomposition
-
-Gardener mirrors Kubernetes concepts very intentionally:
-
-- `gardener-apiserver` like `kube-apiserver`
-- `gardener-controller-manager` like `kube-controller-manager`
-- `gardener-scheduler` like `kube-scheduler`
-- `gardenlet` like `kubelet`
-
-This makes the system easier to reason about for Kubernetes engineers.
-
-2. Good separation of core and provider-specific logic
-
-Provider-specific behavior is not forced into the core repository model anymore. The extension architecture keeps Gardener core cleaner and makes new provider integrations possible without bloating the main control plane.
-
-3. Strong fit for scale
-
-For a project managing many clusters across clouds and regions, the split across API, scheduler, seed agent, operator, and extensions is a better fit than a single manager binary.
-
-4. Ecosystem-friendly design
-
-The extension model is one of Gardener's biggest strengths. It gives you a clean place to add infrastructure, DNS, network, OS, or service-specific behavior.
-
-## Where It Could Be Improved
-
-The structure is good overall, but there are still areas that could likely be optimized.
-
-### 1. `pkg/` Can Become Large
-
-Like many mature Go monorepos, a broad `pkg/` tree can make ownership and dependency boundaries harder to understand over time.
-
-Possible optimization:
-
-- tighten package boundaries further
-- keep public package surfaces small
-- avoid utility-package sprawl
-- continue enforcing architectural import restrictions
-
-### 2. Discoverability Can Be Hard For New Contributors
-
-Because there are many binaries and moving parts, it may take time for new engineers to understand:
-
-- what runs in the garden cluster
-- what runs in the seed cluster
-- which controller owns which step
-- when to write a platform operator versus a true Gardener extension
-
-Possible optimization:
-
-- add more "start here" architecture maps
-- add component-to-directory mapping docs
-- document common extension decision paths more explicitly
-
-### 3. Extension Choice Can Be Confusing
-
-Gardener supports both:
-
-- building on top of the `Shoot` API
-- building true extensions for `extensions.gardener.cloud`
-
-That is powerful, but newcomers can easily choose the wrong entry point.
-
-Possible optimization:
-
-- document a clearer decision matrix:
-  - build an operator on top of `Shoot`
-  - build an extension for infra/control-plane/provider behavior
-
-## Is It Following Go Best Practices?
-
-Yes, mostly for its category.
-
-Important nuance:
-
-- it does not follow the style of a tiny idiomatic Go library
-- it does follow the style of a serious Kubernetes platform/control-plane repository
-
-That is the correct standard to compare it against.
-
-So the right answer is:
-
-- yes, the structure is good
-- yes, it follows widely accepted Kubernetes and operator patterns
-- yes, it is a good model to follow for a SAP extension project
-- no, you should not copy every part of the monorepo complexity into your first custom extension
-
-## What Structure You Should Use For A New SAP Project
-
-For your own project, do not start with a Gardener-sized monorepo. Start with a smaller operator structure that matches your first product scope.
-
-If your goal is to add value above Gardener, the best first structure is:
-
-```text
-cmd/
-  manager/
-    main.go
-
-api/
-  v1alpha1/
-    environment_types.go
-    platformprofile_types.go
-    workloadbundle_types.go
-
-internal/
-  controller/
-    environment_controller.go
-    platformprofile_controller.go
-    workloadbundle_controller.go
-  gardener/
-    shoot_builder.go
-    shoot_client.go
-  render/
-    deployment_renderer.go
-    statefulset_renderer.go
-    daemonset_renderer.go
-    service_renderer.go
-    pvc_renderer.go
-  policy/
-    baseline_applier.go
-  cloud/
-    identity_mapper.go
-  status/
-    conditions.go
-
-pkg/
-  labels/
-  predicates/
-  errors/
-
-config/
-  crd/
-  rbac/
-  manager/
-  samples/
-
-charts/
-docs/
-hack/
-test/
+# Project Structure
+
+## Top-Level Layout
+
+```
+SCO/
+├── backend/                  Go backend service
+├── frontend/                 React frontend
+├── deploy/                   Helm chart for Kubernetes deployment
+├── scripts/                  Local dev startup scripts
+├── docker-compose.yml        Local Docker stack
+├── Makefile                  Common dev commands
+├── backend/openapi/          OpenAPI spec
+└── *.md                      Documentation
 ```
 
-## Why This Is A Good Fit
+## Backend
 
-This gives you:
+```
+backend/
+├── cmd/
+│   ├── api/
+│   │   └── main.go           HTTP server entrypoint; loads config, wires dependencies, starts Gin
+│   └── operator/
+│       └── main.go           Background recommendation loop (standalone runner)
+│
+├── api/
+│   └── v1alpha1/
+│       ├── action_types.go              Action domain type (ClusterAction, ActionRequest, ActionResult)
+│       ├── recommendation_types.go      Recommendation type (kind, evidence, savings, risk)
+│       └── optimizationpolicy_types.go  OptimizationPolicy CRD type (defined, controller pending)
+│
+├── internal/
+│   ├── config/
+│   │   └── config.go         Reads all environment variables into a typed Config struct
+│   │
+│   ├── gardener/
+│   │   ├── client.go         Real Gardener client; connects to Garden cluster and lists Shoots
+│   │   └── fallback.go       Mock landscape; built-in sample clusters and workloads
+│   │
+│   ├── metrics/
+│   │   └── provider.go       Workload and utilization signals per cluster (requests-based, no Prometheus)
+│   │
+│   ├── pricing/
+│   │   └── catalog.go        Heuristic cost catalog; estimates monthly cost by cloud/region/machine type
+│   │
+│   ├── recommender/
+│   │   └── engine.go         Recommendation engine; scores clusters, produces typed recommendations with evidence and savings
+│   │
+│   ├── actions/
+│   │   ├── service.go        Action service; executes hibernate, wake, move-workload, scale-nodepool
+│   │   ├── service_test.go
+│   │   └── transfer.go       Workload transfer logic (real mode: clone deployment, scale source)
+│   │
+│   ├── http/
+│   │   ├── server.go         Gin router setup; all API handler functions
+│   │   └── server_test.go
+│   │
+│   └── models/
+│       └── models.go         Shared domain types: Cluster, Workload, Metrics, Summary
+│
+├── data/
+│   └── actions.jsonl         Persistent action history (written on each action, reloaded on startup)
+│
+├── openapi/
+│   └── openapi.yaml          Full REST API spec
+│
+├── Dockerfile
+├── .dockerignore
+├── go.mod
+└── go.sum
+```
 
-- one main manager binary
-- clear CRD ownership
-- controllers focused on reconciliation only
-- Gardener-specific translation isolated in one place
-- workload rendering isolated from business logic
-- room for tests, manifests, and packaging
+## Frontend
 
-This structure follows the spirit of Gardener without inheriting unnecessary complexity.
+```
+frontend/
+├── src/
+│   ├── app/
+│   │   └── App.tsx           Root component; layout shell, routing, header with action counter
+│   │
+│   ├── features/
+│   │   ├── clusters/
+│   │   │   └── ClusterTable.tsx     Cluster inventory table; expandable rows with workload list and live metrics
+│   │   ├── recommendations/
+│   │   │   └── RecommendationList.tsx   Recommendation cards with filter bar, savings display, action buttons
+│   │   ├── actions/
+│   │   │   └── ActionHistory.tsx    Completed action log panel
+│   │   └── summary/
+│   │       └── SummaryCards.tsx     Savings summary cards (total spend, total savings, action count)
+│   │
+│   ├── services/
+│   │   └── api.ts            Typed API client; all fetch calls to the backend
+│   │
+│   ├── types.ts              Shared TypeScript types matching the backend models
+│   └── style.css             Global styles
+│
+├── index.html
+├── vite.config.ts
+├── tsconfig.json
+├── package.json
+├── nginx.conf                Nginx config for Docker: serves built app, proxies /api to backend
+├── Dockerfile
+└── .dockerignore
+```
 
-## Recommended Design Rules
+## Delivery
 
-When building your SAP extension or platform operator, follow these rules:
+```
+deploy/
+└── helm/
+    └── smart-cost-optimizer/
+        ├── Chart.yaml
+        ├── values.yaml               DATA_SOURCE, image tags, resource limits
+        └── templates/
+            ├── backend-deployment.yaml
+            ├── backend-service.yaml
+            ├── frontend-deployment.yaml
+            └── frontend-service.yaml
 
-1. Keep controllers thin
+scripts/
+├── dev.sh                    Bash: installs frontend deps, builds, starts backend and frontend preview
+└── dev.ps1                   PowerShell equivalent of dev.sh
 
-Controllers should orchestrate reconciliation, not contain all object-building logic inline.
+docker-compose.yml            Two-container stack: backend (Go/8080) + frontend (Nginx/5173)
+Makefile                      Targets: frontend-install, frontend-build, backend-run, run, docker-up, helm-template
+```
 
-2. Keep translation code separate
+## Component Connections
 
-Anything that maps your CRDs into `Shoot` specs, policies, or workload objects should live in builder or renderer packages.
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Browser                                                     │
+│  React SPA (port 5173)                                       │
+│  App.tsx → features/* → services/api.ts                      │
+└───────────────────────────┬──────────────────────────────────┘
+                            │  HTTP  /api/v1/*
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Backend (port 8080)                                         │
+│  cmd/api/main.go                                             │
+│    ├── internal/http/server.go      (Gin routes + handlers)  │
+│    ├── internal/recommender/engine  (recommendation logic)   │
+│    ├── internal/actions/service     (action execution)       │
+│    ├── internal/metrics/provider    (utilization signals)    │
+│    ├── internal/pricing/catalog     (cost estimation)        │
+│    └── internal/gardener/           (data source)            │
+│         ├── client.go   ──────────────────────────────────►  Gardener API (real mode)
+│         └── fallback.go             (mock landscape)         │
+└──────────────────────────────────────────────────────────────┘
+                            │  JSONL write
+                            ▼
+                    backend/data/actions.jsonl
+```
 
-3. Keep cloud-specific logic isolated
+## Data Flow
 
-Do not scatter AWS/Azure/GCP conditionals across controllers. Put them behind focused packages or interfaces.
+**On startup:**
 
-4. Treat status as a first-class feature
+1. `config.go` reads env vars
+2. Data source is selected (`mock`, `real`, or `auto`)
+3. Action history is reloaded from `actions.jsonl`
+4. Recommendation engine runs its first pass
 
-Every CRD should expose:
+**On each recommendation refresh (interval-based):**
 
-- `ObservedGeneration`
-- conditions
-- phase
-- last error
-- ready or progressing state
+1. `gardener/client.go` or `gardener/fallback.go` returns the cluster list
+2. `metrics/provider.go` attaches utilization signals to each cluster
+3. `pricing/catalog.go` estimates monthly costs
+4. `recommender/engine.go` scores each cluster and produces typed recommendations
 
-5. Use finalizers whenever external resources are involved
+**On a `POST /api/v1/actions/*` request:**
 
-This is essential if your API creates or coordinates anything that must be cleaned up safely.
-
-6. Make reconciliation idempotent
-
-This is required for all Kubernetes controller code, especially when talking to Gardener APIs.
-
-## Should You Build A Gardener Extension Or A Standalone Operator?
-
-For your current goal, the better default is a standalone operator on top of Gardener.
-
-Choose that when you want to add:
-
-- higher-level APIs
-- tenant workflows
-- workload onboarding
-- policy automation
-- cost controls
-- enterprise platform defaults
-
-Choose a true Gardener extension only when you need to integrate with Gardener's extension contracts directly, for example:
-
-- infrastructure provider behavior
-- worker behavior
-- control-plane mutation hooks
-- DNS/certificate/network/provider-level integration
-
-## Final Recommendation
-
-Gardener's Go structure is strong, mature, and appropriate for a Kubernetes control-plane system.
-
-You should follow its architectural style, not necessarily its full repository size:
-
-- use Go
-- use controller-runtime and CRDs
-- keep a clean operator layout
-- integrate with `Shoot` first
-- move into true Gardener extensions only where the feature really belongs
-
-That gives you the fastest path to building something useful on top of Gardener without duplicating what Gardener already does well.
+1. Handler in `http/server.go` validates the request
+2. `actions/service.go` executes the action (in-memory mutation or real Gardener API call)
+3. The result is appended to `data/actions.jsonl`
+4. The recommendation engine re-runs to update the dashboard state

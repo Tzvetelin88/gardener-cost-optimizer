@@ -20,6 +20,10 @@ const emptyState: LoadState = {
   summary: null,
 };
 
+function asArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export function App() {
   const [data, setData] = useState<LoadState>(emptyState);
   const [loading, setLoading] = useState(true);
@@ -37,7 +41,12 @@ export function App() {
         getSavingsSummary(),
       ]);
 
-      setData({ clusters, recommendations, actions, summary });
+      setData({
+        clusters: asArray(clusters),
+        recommendations: asArray(recommendations),
+        actions: asArray(actions),
+        summary,
+      });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unknown API error");
     } finally {
@@ -94,14 +103,12 @@ export function App() {
       <section className="content-grid">
         <RecommendationList
           recommendations={data.recommendations}
-          onExecute={(recommendation) => {
-            void runRecommendation(recommendation);
-          }}
+          onExecute={runRecommendation}
         />
         <ActionPanel actions={data.actions} />
       </section>
 
-      <ClusterTable clusters={data.clusters} />
+      <ClusterTable clusters={data.clusters} onRefresh={load} />
     </main>
   );
 }

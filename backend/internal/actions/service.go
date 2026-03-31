@@ -1,8 +1,13 @@
 package actions
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +28,7 @@ type Service struct {
 	shoots      map[string]*kubernetes.Clientset
 	mu          sync.RWMutex
 	actionStore []models.ActionRecord
+	logPath     string
 }
 
 type mockBackend interface {
@@ -32,6 +38,10 @@ type mockBackend interface {
 }
 
 func NewService(gardenerClient *gardener.Client, shootKubeconfigs map[string]string, mock mockBackend) (*Service, error) {
+	return NewServiceWithLogPath(gardenerClient, shootKubeconfigs, mock, "")
+}
+
+func NewServiceWithLogPath(gardenerClient *gardener.Client, shootKubeconfigs map[string]string, mock mockBackend, logPath string) (*Service, error) {
 	shootClients := map[string]*kubernetes.Clientset{}
 	for name, kubeconfig := range shootKubeconfigs {
 		restConfig, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
@@ -47,11 +57,71 @@ func NewService(gardenerClient *gardener.Client, shootKubeconfigs map[string]str
 		shootClients[name] = clientset
 	}
 
-	return &Service{
+	svc := &Service{
 		gardener: gardenerClient,
 		mock:     mock,
 		shoots:   shootClients,
-	}, nil
+		logPath:  logPath,
+	}
+
+	if logPath != "" {
+		svc.actionStore = loadActionLog(logPath)
+	}
+
+	return svc, nil
+}
+
+func loadActionLog(path string) []models.ActionRecord {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var records []models.ActionRecord
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var rec models.ActionRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			log.Printf("skip malformed action log line: %v", err)
+			continue
+		}
+
+		records = append(records, rec)
+	}
+
+	return records
+}
+
+func (s *Service) appendActionLog(record models.ActionRecord) {
+	if s.logPath == "" {
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(s.logPath), 0o755); err != nil {
+		log.Printf("create action log dir: %v", err)
+		return
+	}
+
+	f, err := os.OpenFile(s.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("open action log: %v", err)
+		return
+	}
+	defer f.Close()
+
+	line, err := json.Marshal(record)
+	if err != nil {
+		log.Printf("marshal action record: %v", err)
+		return
+	}
+
+	_, _ = f.Write(append(line, '\n'))
 }
 
 func (s *Service) List() []models.ActionRecord {
@@ -82,6 +152,27 @@ func (s *Service) HibernateCluster(ctx context.Context, clusterID string) (model
 	}
 
 	return s.record("hibernate-cluster", clusterID, "completed", "Mock cluster hibernation completed."), nil
+}
+
+func (s *Service) WakeCluster(ctx context.Context, clusterID string) (models.ActionRecord, error) {
+	namespace, name := splitClusterID(clusterID)
+	if s.gardener != nil {
+		if err := s.gardener.SetHibernation(ctx, namespace, name, false); err != nil {
+			return s.record("wake-cluster", clusterID, "failed", err.Error()), err
+		}
+		return s.record("wake-cluster", clusterID, "completed", "Cluster wake-up requested through Gardener."), nil
+	}
+
+	if s.mock == nil {
+		err := fmt.Errorf("gardener client is not configured")
+		return s.record("wake-cluster", clusterID, "failed", err.Error()), err
+	}
+
+	if err := s.mock.SetHibernation(ctx, namespace, name, false); err != nil {
+		return s.record("wake-cluster", clusterID, "failed", err.Error()), err
+	}
+
+	return s.record("wake-cluster", clusterID, "completed", "Mock cluster wake-up completed."), nil
 }
 
 func (s *Service) ScaleNodePool(ctx context.Context, clusterID string, workerPool string, minimum int64, maximum int64) (models.ActionRecord, error) {
@@ -164,7 +255,7 @@ func (s *Service) MoveWorkload(ctx context.Context, sourceCluster string, target
 }
 
 func (s *Service) record(actionType string, target string, status string, message string) models.ActionRecord {
-	record := models.ActionRecord{
+	rec := models.ActionRecord{
 		ID:        fmt.Sprintf("%s-%d", actionType, time.Now().UnixNano()),
 		Type:      actionType,
 		Status:    status,
@@ -174,9 +265,11 @@ func (s *Service) record(actionType string, target string, status string, messag
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.actionStore = append([]models.ActionRecord{record}, s.actionStore...)
-	return record
+	s.actionStore = append([]models.ActionRecord{rec}, s.actionStore...)
+	s.mu.Unlock()
+
+	s.appendActionLog(rec)
+	return rec
 }
 
 func splitClusterID(clusterID string) (string, string) {

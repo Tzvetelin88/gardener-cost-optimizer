@@ -1,0 +1,2 @@
+{"id":"hibernate-cluster-1774980162466162500","type":"hibernate-cluster","status":"completed","target":"garden-dev/dev-aws-b","message":"Mock cluster hibernation completed.","createdAt":"2026-03-31T18:02:42.4661625Z"}
+{"id":"wake-cluster-1774980162478945300","type":"wake-cluster","status":"completed","target":"garden-dev/dev-aws-b","message":"Mock cluster wake-up completed.","createdAt":"2026-03-31T18:02:42.4789453Z"}

@@ -10,13 +10,32 @@ import (
 	"smart-cost-optimizer/backend/internal/models"
 )
 
+
+type EngineConfig struct {
+	IdleThresholdPercent     float64
+	TargetUtilizationPercent float64
+}
+
+func DefaultEngineConfig() EngineConfig {
+	return EngineConfig{
+		IdleThresholdPercent:     75,
+		TargetUtilizationPercent: 70,
+	}
+}
+
 type Engine struct {
 	metrics *metrics.Provider
+	cfg     EngineConfig
 }
 
 func NewEngine(metricsProvider *metrics.Provider) *Engine {
-	return &Engine{metrics: metricsProvider}
+	return NewEngineWithConfig(metricsProvider, DefaultEngineConfig())
 }
+
+func NewEngineWithConfig(metricsProvider *metrics.Provider, cfg EngineConfig) *Engine {
+	return &Engine{metrics: metricsProvider, cfg: cfg}
+}
+
 
 func (e *Engine) BuildSnapshot(ctx context.Context, clusters []models.ClusterSummary) (models.InventorySnapshot, map[string]models.ClusterMetrics, error) {
 	metricsMap := make(map[string]models.ClusterMetrics, len(clusters))
@@ -65,7 +84,7 @@ func (e *Engine) recommend(clusters []models.ClusterSummary, metricsMap map[stri
 
 	for _, cluster := range clusters {
 		clusterMetrics := metricsMap[cluster.Name]
-		if !cluster.Hibernated && clusterMetrics.IdleScore >= 75 && cluster.WorkloadCount == 0 {
+		if !cluster.Hibernated && clusterMetrics.IdleScore >= e.cfg.IdleThresholdPercent && cluster.WorkloadCount == 0 {
 			recommendations = append(recommendations, models.Recommendation{
 				ID:             "hibernate-" + cluster.Name,
 				Kind:           "idle-cluster",
@@ -86,8 +105,8 @@ func (e *Engine) recommend(clusters []models.ClusterSummary, metricsMap map[stri
 				continue
 			}
 
-			target := cheapestTarget(clusters, cluster)
-			if target == nil {
+		target := cheapestTarget(clusters, cluster, e.cfg.TargetUtilizationPercent)
+		if target == nil {
 				continue
 			}
 
@@ -121,14 +140,14 @@ func (e *Engine) recommend(clusters []models.ClusterSummary, metricsMap map[stri
 	return recommendations
 }
 
-func cheapestTarget(clusters []models.ClusterSummary, source models.ClusterSummary) *models.ClusterSummary {
+func cheapestTarget(clusters []models.ClusterSummary, source models.ClusterSummary, maxUtilization float64) *models.ClusterSummary {
 	var best *models.ClusterSummary
 	for idx := range clusters {
 		cluster := &clusters[idx]
 		if cluster.Name == source.Name || cluster.Hibernated || cluster.Region != source.Region {
 			continue
 		}
-		if cluster.MonthlyCost >= source.MonthlyCost || cluster.UtilizationScore > 70 {
+		if cluster.MonthlyCost >= source.MonthlyCost || float64(cluster.UtilizationScore) > maxUtilization {
 			continue
 		}
 		if cluster.Purpose != source.Purpose {
